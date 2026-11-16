@@ -217,6 +217,15 @@
     }
     ["pointerdown", "pointerup", "mousedown", "touchend", "keydown", "click"]
         .forEach(function (t) { window.addEventListener(t, unlockAudio, true); });
+    // A hidden tab stops the game loop but not Web Audio: hold the run music
+    // until the tab is back.
+    document.addEventListener("visibilitychange", function () {
+        try {
+            if (!audioReady || !audio_context) return;
+            var p = document.hidden ? audio_context.suspend() : audio_context.resume();
+            if (p) p.catch(function () {});
+        } catch (e) { /* audio.js not loaded */ }
+    });
 
     // Wrap the audio plugin's imports (call from register_plugin, after
     // audio.js registered). Until unlocked they do nothing.
