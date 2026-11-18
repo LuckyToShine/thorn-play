@@ -2,16 +2,23 @@
 <html lang="en">
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>Thorn</title>
     <!-- logo.png is copied from assets/ by build.sh -->
     <link rel="icon" type="image/png" href="logo.png">
     <style>
+        html, body, canvas {
+            width: 100vw;
+            width: 100dvw;
+            height: 100vh;
+            height: 100dvh;
+        }
         html, body {
             margin: 0;
             padding: 0;
-            width: 100%;
-            height: 100%;
             overflow: hidden;
             position: fixed;
             overscroll-behavior: none;
@@ -20,8 +27,6 @@
         canvas {
             margin: 0;
             padding: 0;
-            width: 100%;
-            height: 100%;
             position: absolute;
             z-index: 0;
             outline: none;

@@ -72,7 +72,8 @@
         "#thorn-deck .msg{margin:0}",
         "#thorn-deck .msg:empty{display:none}",
         "#thorn-text{position:fixed;z-index:10;display:none;border:2px solid #fff;",
-        "  padding:0 6px;outline:none;margin:0}",
+        "  padding:0 6px;outline:none;margin:0;transform-origin:0 0}",
+        "body.thorn-force-landscape #glcanvas{transform-origin:0 0;transform:rotate(90deg)}",
     ].join("\n");
     document.head.appendChild(style);
 
@@ -164,11 +165,19 @@
     function placeText() {
         if (!rect) return;
         var r = canvas.getBoundingClientRect();
-        var sx = r.width / (canvas.width || r.width || 1);
-        var sy = r.height / (canvas.height || r.height || 1);
+        // Rotated (forced landscape): the canvas' x runs down the screen and
+        // its y runs right to left, so the field turns with it.
+        var sx = (rotated ? r.height : r.width) / (canvas.width || 1);
+        var sy = (rotated ? r.width : r.height) / (canvas.height || 1);
         var h = rect[3] * sy;
-        text.style.left = (r.left + rect[0] * sx) + "px";
-        text.style.top = (r.top + rect[1] * sy) + "px";
+        if (rotated) {
+            text.style.left = (r.right - rect[1] * sy) + "px";
+            text.style.top = (r.top + rect[0] * sx) + "px";
+        } else {
+            text.style.left = (r.left + rect[0] * sx) + "px";
+            text.style.top = (r.top + rect[1] * sy) + "px";
+        }
+        text.style.transform = rotated ? "rotate(90deg)" : "";
         text.style.width = (rect[2] * sx) + "px";
         text.style.height = h + "px";
         // >= 16px or iOS zooms the page when the field gets focus.
@@ -246,6 +255,117 @@
         });
     }
 
+    // ---------- fullscreen (Safari/WebKit-safe) ----------
+    // gl.js calls canvas.requestFullscreen() from requestAnimationFrame:
+    // WebKit lacks the unprefixed API or rejects it outside a gesture, and a
+    // fullscreen canvas hides our HTML overlays. So: the whole page goes
+    // fullscreen, prefixed APIs are tried too, and a request that didn't take
+    // is retried inside the next gesture. iPhone Safari has no Fullscreen API
+    // at all: there it only toggles the `thorn-ios-fs` class.
+    var root = document.documentElement;
+    // Calls from Rust run inside a wasm frame; a resize must not re-enter
+    // wasm from there (miniquad panics), so it waits for the next task.
+    function deferResize() {
+        setTimeout(function () { window.dispatchEvent(new Event("resize")); }, 0);
+    }
+    var pendingFs = null; // wanted state not reached yet
+    var iosFs = false;
+    function fsElement() {
+        return document.fullscreenElement || document.webkitFullscreenElement || null;
+    }
+    function hasFsApi() {
+        return !!(root.requestFullscreen || root.webkitRequestFullscreen);
+    }
+    function quiet(f) {
+        try {
+            var p = f();
+            if (p && p.catch) p.catch(function () {});
+        } catch (e) { /* refused: retried on the next gesture */ }
+    }
+    function applyFs(want) {
+        if (!hasFsApi()) {
+            pendingFs = null;
+            iosFs = want;
+            root.classList.toggle("thorn-ios-fs", want);
+            window.scrollTo(0, 1);
+            deferResize();
+            return;
+        }
+        if (want === !!fsElement()) { pendingFs = null; return; }
+        if (want) {
+            quiet(function () {
+                return root.requestFullscreen ? root.requestFullscreen()
+                    : root.webkitRequestFullscreen ? root.webkitRequestFullscreen()
+                    : root.webkitEnterFullscreen ? root.webkitEnterFullscreen() : null;
+            });
+        } else {
+            quiet(function () {
+                return document.exitFullscreen ? document.exitFullscreen()
+                    : document.webkitExitFullscreen ? document.webkitExitFullscreen() : null;
+            });
+        }
+    }
+    function setFullscreen(want) {
+        pendingFs = !!want;
+        applyFs(pendingFs);
+    }
+    ["pointerup", "touchend", "click", "keydown"].forEach(function (t) {
+        window.addEventListener(t, function () {
+            if (pendingFs !== null) applyFs(pendingFs);
+        }, true);
+    });
+    ["fullscreenchange", "webkitfullscreenchange"].forEach(function (t) {
+        document.addEventListener(t, function () {
+            if (pendingFs === !!fsElement()) pendingFs = null;
+        });
+    });
+
+    // ---------- forced landscape ----------
+    // Title and Chiming Tree are landscape only. Lock the orientation where
+    // the browser allows it; else, while the viewport is portrait, turn the
+    // canvas 90deg clockwise at the swapped size, and map input to match.
+    var forceLandscape = false;
+    var rotated = false;
+    function layoutLandscape() {
+        var want = forceLandscape && window.innerHeight > window.innerWidth;
+        var st = canvas.style;
+        if (want) {
+            st.left = window.innerWidth + "px";
+            st.top = "0px";
+            st.width = window.innerHeight + "px";
+            st.height = window.innerWidth + "px";
+        } else if (rotated) {
+            st.left = st.top = st.width = st.height = "";
+        }
+        if (want !== rotated) {
+            rotated = want;
+            document.body.classList.toggle("thorn-force-landscape", want);
+            deferResize();
+        }
+        placeText();
+    }
+    function setLandscape(force) {
+        force = !!force;
+        if (force === forceLandscape) return;
+        forceLandscape = force;
+        var o = window.screen && screen.orientation;
+        if (o) {
+            if (force && o.lock) quiet(function () { return o.lock("landscape"); });
+            if (!force && o.unlock) quiet(function () { return o.unlock(); });
+        }
+        layoutLandscape();
+    }
+    // Before gl.js' own onresize (registered later), so it sees the new size.
+    window.addEventListener("resize", layoutLandscape);
+    // gl.js maps clientX/Y with the canvas' bounding box; undo the rotation.
+    var unrotatedPosition = mouse_relative_position;
+    mouse_relative_position = function (clientX, clientY) {
+        if (!rotated) return unrotatedPosition(clientX, clientY);
+        var r = canvas.getBoundingClientRect();
+        var s = dpi_scale();
+        return { x: (clientY - r.top) * s, y: (r.right - clientX) * s };
+    };
+
     // ---------- plugin ----------
     function register_plugin(importObject) {
         var env = importObject.env;
@@ -308,6 +428,9 @@
         };
         env.thorn_audio_unlocked = function () { return audioReady ? 1 : 0; };
         guardAudio(env);
+        env.sapp_is_fullscreen = function () { return (fsElement() || iosFs) ? 1 : 0; };
+        env.sapp_set_fullscreen = setFullscreen;
+        env.thorn_set_landscape = setLandscape;
         env.thorn_is_touch = function () {
             return (("ontouchstart" in window) || navigator.maxTouchPoints > 0) ? 1 : 0;
         };
